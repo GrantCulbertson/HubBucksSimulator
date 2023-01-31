@@ -1,0 +1,267 @@
+---
+title: "Project2 - Grant Culbertson"
+author: "Grant Culbertson"
+date: "11/1/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(mdsr)
+library(mosaic)
+library(dplyr)
+library(Hmisc)
+library(httr)
+library(spotifyr)
+library(knitr)
+library(lubridate)
+library(readr)
+library(ggplot2)
+library(rvest)
+library(purrr)
+library(stringr)
+library(gsubfn)
+pkgs <- c("readr", "data.table", "dplyr", "tidyr", "DT", "reshape2", "tm", "stringr", "gsubfn", "lubridate",
+          "ggplot2", "gridExtra", "highcharter", "plotly", "ggrepel", "leaflet", "leaflet.extras", "ggmap", 
+          "RColorBrewer", "viridisLite", "countrycode", "ggmap", "zipcode") 
+
+for (pkg in pkgs) {
+  if (! (pkg %in% rownames(installed.packages())))
+  { install.packages(pkg) }
+  require(pkg, character.only = TRUE)
+}
+rm(pkgs, pkg)
+```
+
+
+```{r load in data}
+##Load in the Data
+Pitchfork_Data <- read.csv(file.choose())
+##Mutate the Data to get number of characters in a review
+Pitchfork_Data <- Pitchfork_Data %>%
+  mutate(char_count = nchar(review))
+head(Pitchfork_Data)
+```
+I'm looking at a dataset that contains about 20,000 reviews from the music review website pitchfork.
+
+The first thing I want to do with this dataset is see if there is a relation between how long a review is (number of characters) and the score the reviewer gives. Do reviewers write more about albums they really like? Or less about albums they really dislike?
+
+```{r bootstrap nchar}
+##Make model to estimate review score based on number of characters
+scoreModel = lm(score ~ char_count , data = Pitchfork_Data)
+summary(scoreModel)
+##Bootstrap the model
+bootstrapBetas <- function(trials , data){
+  count = 1
+  length = nrow(data)
+  rviews = 1:19555
+  bootOutcome <- matrix(0 , nrow=trials , ncol=2)
+  while(count < trials){
+    bootx = sample(rviews , replace = TRUE)
+    scoreModel_Boot = lm(score ~ char_count , data = Pitchfork_Data[bootx,])
+    bootOutcome[count,] = coef(scoreModel_Boot)
+    count = count +1
+  }
+  return(as.data.frame(bootOutcome))
+}
+##Test function
+pitchforkBetas <- bootstrapBetas(1000 , Pitchfork_Data)
+pitchforkBetas
+##Analyze results
+hist(pitchforkBetas$V2 , breaks = 50)
+skim(pitchforkBetas)
+```
+Kind of unsuprisingly the beta value is extremely low for the number of characters, so I'm sad to say that my theory here fell on it's face quite early. Because this analysis here was so unexciting I'm going to do my project on a different dataset, but this allowed me to get a framework together for bootstrapping.
+
+Now I'm going to try and look at UPS data for my project.
+```{r get in UPS data}
+#**Looking at workplace Injury Data**##
+##Loading in my dataset from OSHA
+workplace_data <- fread(file.choose(), na.strings = "" ,stringsAsFactors = FALSE, strip.white = TRUE, data.table = FALSE)
+names <- c("UPS" , "United Parcel Service Inc.", "United Parcel Service" , "UNITED PARCEL SERVICE, WILLOW GROVE HUB" , "UNITED PARCEL SERVICE" , "United Parcel Services Little Rock Airport" , "UNITED PARCEL SERVICE, INC. (UPS)" , "United Parcel Service Ground Freight" , "UNITED PARCEL SERVICE CO.","United Parcel Service of America, Inc.")
+jobs <- c("General Warehousing and Storage")
+upsData <- workplace_data %>%
+  filter(company_name %in% names)
+head(upsData)
+
+```
+I think this is a pretty flawed data set in terms of how facilities are listed, like some warehouses are listed as office buildings so you see offices here with like 1200 injuries. I was going to filter to just warehouse jobs but because it seemed like the data is flawed I'm not going to do that and just get totals for injuries and employees across the whole data set.
+
+Next, Ill look try and make a simulation for the number of grill outs a UPS hub sees in a year. Specifically I'm looking at the columbus hub I worked at which has 2772 employees according to this dataset, evey 50000 safe work days there was a grillout. I'm resampling the dataset and then calculating the injury incidence rate for a week with the formula on the OSHA website, then I'm basically just adding 1 to a counter every time safe work days gets past 50000.
+```{r}
+#Load data 
+workplace_data <- read.csv(file.choose())
+#Start to look at just UPS data
+names <- c("UPS" , "United Parcel Service Inc.", "United Parcel Service" , "UNITED PARCEL SERVICE, WILLOW GROVE HUB" , "UNITED PARCEL SERVICE" , "United Parcel Services Little Rock Airport" , "UNITED PARCEL SERVICE, INC. (UPS)" , "United Parcel Service Ground Freight" , "UNITED PARCEL SERVICE CO.","United Parcel Service of America, Inc.")
+jobs <- c("General Warehousing and Storage")
+upsData <- workplace_data %>%
+  filter(company_name %in% names) %>%
+  mutate(injuriesPerEmployee = annual_average_employees/total_injuries) %>%
+  mutate(injuriesPerEmployee = ifelse(injuriesPerEmployee == "Inf" , 0 , injuriesPerEmployee))
+##Get the rate of injury from the UPS data
+injury_rate <- sum(upsData$total_injuries) / sum(upsData$annual_average_employees)
+injury_rate
+incidenceRate <- (sum(upsData$total_injuries) / sum(upsData$total_hours_worked)) * 4000
+incidenceRate
+##Resample for a spread of incidence rate
+incidence <- function(trials){
+  count = 0
+  hold = vector(length = trials)
+  while(count <= trials){
+    day = 1
+    count = count + 1
+    safeWorkDays = 0
+    bbq = vector(length = 365)
+    while(day <= 365){
+    resampled <- resample(upsData)
+    incidenceRate <- (sum(resampled$total_injuries) / sum(resampled$total_hours_worked)) * 4000
+    injuries <- (2772/100) * incidenceRate
+    safeWorkDays = safeWorkDays + (2772 - injuries)
+    if(safeWorkDays >= 50000){
+      bbq[day] = 1
+      safeWorkDays = 0
+    }
+    else{
+      bbq[day] = 0
+    }
+    day = day + 1
+    }
+  hold[count] = sum(bbq)
+  }
+  return(hold)
+}
+x <- incidence(100)
+x
+
+
+```
+Considering I get 19 every time I run my simulation I don't think this is worth using in the presentation. This is mainly due to the incidence rate being pretty much the same for every resample of the data, going between around 4.1 to 4.8.
+
+Next, I'm going to look at my chance of getting hurt:
+```{r me getting hurt}
+##Design simulation for me getting hurt
+gotHurt <- function(intervals , trials){
+  chanceHurt <- vector(length = intervals)
+  me = 958
+  count2 = 1
+  while(count2 <= intervals){
+  hold <- vector(length = trials)
+  count = 1
+  while(count <= trials){
+    week = 0
+    hurt = vector(length = 12)
+    while(week <= 12){
+      week = week + 1
+      resampled <- resample(upsData)
+      incidenceRate <- (sum(resampled$total_injuries) / sum(resampled$total_hours_worked)) * 4000
+      injuries <- (2772/100) * incidenceRate
+      who_hurt <- floor(runif(floor(injuries) , min = 0 , max = 2722))
+      if(me %in% who_hurt){
+        hurt[week] = 1
+      }
+      else{
+        hurt[week] = 0
+      }
+    }
+    hold[count] = sum(hurt)
+    count = count + 1
+  }
+  chanceHurt[count2] = sum(hold)/trials
+  count2 = count2 + 1
+  print(count2)
+  }
+  return(chanceHurt)
+}
+results <- gotHurt(100 , 1000)
+results
+hist(results , breaks = 25)
+summary(results)
+
+```
+Looking at the results we can see that my chance of getting hurt in a given 12 week period is pretty low, so I wouldn't say that I was lucky to escape UPS without an injury.
+
+Now that I have a percent chance that any given employee is hurt within a 12 month period, I can calculate how many total injuries can be expected in a year at the Columbus hub.
+```{r hurt in a year}
+##Chance any given employee is hurt in a 12 week period
+hurtInYear <- function(trials){
+  count = 1
+  hold = vector(length = trials)
+  while(count <= trials){
+    hold[count] = rbinom(1 , 2722 , .01886) * 4
+    count = count + 1
+  }
+  return(hold)
+}
+hurtYear <- hurtInYear(100000)
+summary(hurtYear)
+hist(hurtYear)
+```
+
+Looking at the results, there are a lot of injuries, so probably not a super safe workplace, but that makes sense. Obviously this distribution could be extremely different from the truth given that the data set seems flawed.
+
+Next, I'm going to do a simulation to see how many hub bucks I would earn in my tenure. There wasn't really any great data on misloads online so I grabbed some of these variables from someones post on a UPS forum, and some of these values are just what I remember from working at UPS.
+```{r hub bucks simulation}
+##Simulate how many hub bucks I make in a year
+hubBucks <- function(intervals  , trials){
+  int_count = 0 
+  chanceToCatch <- .95
+  Misload <- 1/4620
+  Salt <- .0001
+  totalCount <- vector(length = intervals)
+  while(int_count <= intervals){
+    int_count = int_count + 1
+  count = 0
+  hold = vector(length=trials)
+  caught = vector(length=trials)
+  while(count <= trials){
+    count2 = 1
+    packagesForDay <- 1
+    packagesForDay <- seq(packagesForDay , 120000 , 1)
+    while(count2 <= 120000){
+      count2 = count2 + 1
+      if(rbinom(1 , 1 , Salt) == 1){
+        packagesForDay[count2] = 0
+      }
+      if(rbinom(1 , 1 , Misload) == 1){
+        packagesForDay[count2] = 0
+        packagesForDay[count2]
+      }
+    }
+    myFlow <- rpois(5 , 300)
+    myFlow <- sum(myFlow)
+    myPackages <- sample(packagesForDay  , myFlow, replace = FALSE)
+    count = count + 1
+    badToMe <- length(myPackages[myPackages == 0])
+    hold[count] = badToMe
+  }
+  caught = 0
+  for(package in hold){
+    if(package == 0 & rbinom(1 , 1 , chanceToCatch) == 1){
+      caught = caught + 1
+      }
+  }
+  caught = caught %/% 3
+  count2 = 0
+  hubBucksCount = vector(length=caught)
+  while(count2 < caught){
+    count2 = count2 + 1
+    if(rbinom(1 , 1 , .5) == 1){
+      hubBucksCount[count2] = 5
+    }else{
+      hubBucksCount[count2] = 10
+      }
+  }
+  print(int_count)
+  totalCount[int_count] = sum(hubBucksCount)
+  }
+  return(totalCount)
+}
+buckResults <- hubBucks(500 , 12 * 5)
+hist(buckResults , breaks = 25)
+summary(buckResults)
+qqnorm(buckResults)
+```
+
+
+
